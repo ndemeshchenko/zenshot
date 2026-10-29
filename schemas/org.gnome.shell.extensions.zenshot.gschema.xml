@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.zenshot" path="/org/gnome/shell/extensions/zenshot/">
+    <key name="trigger" type="as">
+      <default><![CDATA[['<Super><Shift>a']]]></default>
+      <summary>Start a capture</summary>
+    </key>
+  </schema>
+</schemalist>

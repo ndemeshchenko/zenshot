@@ -1,0 +1,8 @@
+{
+  "uuid": "zenshot@local",
+  "name": "Zenshot",
+  "description": "Instant screenshot area selection with annotation tools (line, arrow, rectangle, area, blur, pen, text) for GNOME Shell on Wayland.",
+  "shell-version": ["50"],
+  "settings-schema": "org.gnome.shell.extensions.zenshot",
+  "version": 1
+}
