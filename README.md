@@ -18,7 +18,7 @@ only encodes the small area you select.
 
 - Area selection on a frozen screen, across multiple monitors
 - Tools: **Line, Arrow, Rect, Area** (filled highlight), **Blur** (mosaic), **Pen, Text**
-- Six colours, three sizes, undo
+- Icon toolbar with tooltips, a 12-colour palette popup (red by default), three sizes, undo
 - Copy to clipboard (PNG), or save to `~/Pictures/Screenshots`, with a notification
 
 ## Keys

@@ -18,13 +18,21 @@ printf "[org/gnome/shell]\nenabled-extensions=['%s']\ndisable-user-extensions=fa
 out=${ZENSHOT_TEST_OUT:-$here/tests/last-render.png}
 env -i PATH="$PATH" HOME="$work" GSETTINGS_BACKEND=keyfile XDG_CONFIG_HOME="$work/config" \
     XDG_DATA_HOME="$work/data" XDG_CACHE_HOME="$work/cache" XDG_RUNTIME_DIR="$work/run" \
-    ZENSHOT_TEST_OUT="$out" \
+    ZENSHOT_TEST_OUT="$out" ZENSHOT_TEST_UI="${ZENSHOT_TEST_UI:-}" \
     timeout 60 dbus-run-session -- gnome-shell --headless --wayland --no-x11 \
     --virtual-monitor 1600x900 > "$work/shell.log" 2>&1 || true
 grep -E "zenshot|T: |CRITICAL|JS ERROR" "$work/shell.log" | sed 's/.*Message: [0-9:.]* //'
 check() { grep -q "$1" "$work/shell.log" && echo "PASS  $2" || { echo "FAIL  $2"; fail=1; }; }
 fail=0
 check 'T: phase = "edit"' "selection enters edit phase"
+check 'T: tooltip on hover = true' "tooltip shows on hover"
+check 'T: tooltip gone after click = true' "tooltip hides on click"
+check 'T: default colour = 0' "default colour is the first (red)"
+check 'T: palette open = true' "colour button opens the palette"
+check 'T: colour after pick = 5' "picking a swatch changes the colour"
+check 'T: palette closed = true' "palette closes after picking"
+check 'T: anns after palette clicks = 0' "palette clicks do not draw"
+check 'T: esc closes palette only = \[true,false\]' "esc closes the palette before the editor"
 check 'anns after text = \["line","blur","text:hi"\]' "line, blur and text annotations"
 check 'T: anns after ctrl+z = 2' "undo"
 check 'T: active after ctrl+c = false' "ctrl+c closes the editor"
