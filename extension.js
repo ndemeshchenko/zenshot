@@ -777,18 +777,40 @@ class Editor {
     }
 }
 
+// Called on the freshly imported copy of this file, see enable().
+export function start(ext) {
+    const editor = new Editor();
+    const settings = ext.getSettings();
+    Main.wm.addKeybinding('trigger', settings, Meta.KeyBindingFlags.NONE,
+        Shell.ActionMode.NORMAL, () => editor.start());
+    return () => {
+        Main.wm.removeKeybinding('trigger');
+        editor.close();
+    };
+}
+
+// ponytail: enable() re-imports this file through a symlink named after its mtime, so `make install`
+// (disable + enable) runs new code without a re-login. GJS caches modules by path and ignores query
+// strings, hence the symlink. Changes to this class or to metadata.json still need a re-login.
 export default class Zenshot extends Extension {
-    enable() {
-        this._editor = new Editor();
-        this._settings = this.getSettings();
-        Main.wm.addKeybinding('trigger', this._settings, Meta.KeyBindingFlags.NONE,
-            Shell.ActionMode.NORMAL, () => this._editor.start());
+    async enable() {
+        const js = this.dir.get_child('extension.js');
+        const tag = js.query_info('etag::value', Gio.FileQueryInfoFlags.NONE, null).get_etag();
+        const link = Gio.File.new_for_path(GLib.build_filenamev(
+            [GLib.get_user_runtime_dir(), 'zenshot', `${tag.replace(/\W/g, '_')}.js`]));
+        if (!link.query_exists(null)) {
+            GLib.mkdir_with_parents(link.get_parent().get_path(), 0o700);
+            link.make_symbolic_link(js.get_path(), null);
+        }
+        const token = this._token = Symbol('enable');
+        const live = await import(link.get_uri());
+        if (this._token === token) // not disabled while importing
+            this._stop = live.start(this);
     }
 
     disable() {
-        Main.wm.removeKeybinding('trigger');
-        this._editor?.close();
-        this._editor = null;
-        this._settings = null;
+        this._token = null;
+        this._stop?.();
+        this._stop = null;
     }
 }
