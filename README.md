@@ -18,6 +18,7 @@ only encodes the small area you select.
 
 - Area selection on a frozen screen, across multiple monitors, each captured at its own scale
 - Window capture: the window under the pointer is highlighted, click to select it
+- Resize the selection after picking it: drag its edges or corners; annotations stay in place
 - Tools: **Line, Arrow, Rect, Area** (filled highlight), **Blur** (mosaic), **Pen, Text**
 - Icon toolbar with tooltips, a 12-colour palette popup (red by default), three sizes, undo
 - Copy to clipboard (PNG), or save to `~/Pictures/Screenshots`, with a notification
@@ -28,6 +29,7 @@ only encodes the small area you select.
 |---|---|
 | Super+Shift+A | Start a capture (configurable) |
 | Click (no drag) | Select the highlighted window |
+| Drag an edge or corner | Resize the selection |
 | Enter / Ctrl+C | Copy and close |
 | Ctrl+S | Save and copy |
 | Ctrl+Z | Undo |

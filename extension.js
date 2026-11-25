@@ -22,6 +22,7 @@ const TOOLS = [
 ];
 const BLUR_BLOCK = 8; // logical px per mosaic block
 const MIN_SELECTION = 6;
+const GRAB = 8; // px either side of the selection border that resize it in the edit phase
 
 const BTN_STYLE = 'padding: 6px; border-radius: 6px;';
 const BTN_ACTIVE = `${BTN_STYLE} background-color: #3584e4;`;
@@ -189,6 +190,13 @@ class Editor {
         }
         this._border = new St.Widget({style: 'border: 1px solid #3584e4;'});
         this._root.add_child(this._border);
+        this._handles = [];
+        for (let i = 0; i < 8; i++) {
+            const h = new St.Widget({visible: false, width: 8, height: 8,
+                style: 'background-color: white; border: 1px solid #3584e4;'});
+            this._handles.push(h);
+            this._root.add_child(h);
+        }
 
         this._phase = 'select';
         this._sel = null;
@@ -256,10 +264,28 @@ class Editor {
             this._border.set_position(s.x - o, s.y - o);
             this._border.set_size(s.w + 2 * o, s.h + 2 * o);
         }
+        const edit = this._phase !== 'select';
+        [[0, 0], [0.5, 0], [1, 0], [1, 0.5], [1, 1], [0.5, 1], [0, 1], [0, 0.5]].forEach(([fx, fy], i) => {
+            this._handles[i].visible = edit;
+            this._handles[i].set_position(Math.round(s.x + fx * s.w - 4), Math.round(s.y + fy * s.h - 4));
+        });
+        if (edit && this._area) {
+            this._area.set_position(s.x, s.y);
+            this._area.set_size(s.w, s.h);
+        }
     }
 
     _winAt(x, y) {
         return this._wins.find(r => x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h) ?? null;
+    }
+
+    // The selection edges a point grabs, e.g. 'n', 'se', or '' for none.
+    _edgesAt(x, y) {
+        const s = this._sel, g = GRAB;
+        if (x < s.x - g || y < s.y - g || x > s.x + s.w + g || y > s.y + s.h + g)
+            return '';
+        return (Math.abs(y - s.y) <= g ? 'n' : Math.abs(y - s.y - s.h) <= g ? 's' : '') +
+            (Math.abs(x - s.x) <= g ? 'w' : Math.abs(x - s.x - s.w) <= g ? 'e' : '');
     }
 
     _inSel(x, y) {
@@ -300,6 +326,12 @@ class Editor {
             this._commitText();
             return Clutter.EVENT_STOP;
         }
+        const edges = this._edgesAt(x, y);
+        if (edges) {
+            this._resize = {edges, x, y, from: {...this._sel}};
+            this._dragging = true;
+            return Clutter.EVENT_STOP;
+        }
         if (!this._inSel(x, y))
             return Clutter.EVENT_STOP;
         const lx = x - this._sel.x, ly = y - this._sel.y;
@@ -322,6 +354,10 @@ class Editor {
                 this._layoutDim();
             }
         }
+        if (this._phase === 'edit' && !this._dragging) {
+            const edges = this._edgesAt(...ev.get_coords());
+            this._setCursor(edges ? Clutter.CursorType[`${edges.toUpperCase()}_RESIZE`] : Clutter.CursorType.DEFAULT);
+        }
         if (!this._dragging)
             return Clutter.EVENT_PROPAGATE;
         const [x, y] = ev.get_coords();
@@ -331,6 +367,21 @@ class Editor {
             const x1 = Math.min(this._W, Math.max(sx, x)), y1 = Math.min(this._H, Math.max(sy, y));
             this._sel = {x: x0, y: y0, w: x1 - x0, h: y1 - y0};
             this._layoutDim();
+        } else if (this._resize) {
+            const {edges, from: f} = this._resize, M = MIN_SELECTION;
+            const dx = x - this._resize.x, dy = y - this._resize.y;
+            let x0 = f.x, y0 = f.y, x1 = f.x + f.w, y1 = f.y + f.h;
+            if (edges.includes('w'))
+                x0 = Math.max(0, Math.min(x0 + dx, x1 - M));
+            if (edges.includes('e'))
+                x1 = Math.min(this._W, Math.max(x1 + dx, x0 + M));
+            if (edges.includes('n'))
+                y0 = Math.max(0, Math.min(y0 + dy, y1 - M));
+            if (edges.includes('s'))
+                y1 = Math.min(this._H, Math.max(y1 + dy, y0 + M));
+            this._sel = {x: Math.round(x0), y: Math.round(y0), w: Math.round(x1 - x0), h: Math.round(y1 - y0)};
+            this._layoutDim();
+            this._area.queue_repaint();
         } else if (this._cur) {
             const lx = x - this._sel.x, ly = y - this._sel.y;
             this._cur.x2 = lx;
@@ -363,6 +414,13 @@ class Editor {
                     this.close();
                 });
             }
+        } else if (this._resize) {
+            this._resize = null;
+            this._phase = 'crop';
+            this._recrop().catch(e => {
+                logError(e, 'zenshot: resize failed');
+                this.close();
+            });
         } else if (this._cur) {
             const a = this._cur;
             this._cur = null;
@@ -406,8 +464,8 @@ class Editor {
 
     // --- edit phase ------------------------------------------------------
 
-    async _enterEdit() {
-        const s = this._sel;
+    // Copies selection `s` out of the captured monitors; null if the editor closed meanwhile.
+    async _crop(s) {
         const t0 = GLib.get_monotonic_time();
         // Output at the highest scale among the monitors the selection touches; a selection on one
         // monitor is a 1:1 copy of its pixels.
@@ -428,7 +486,7 @@ class Editor {
                     v.s, null, 0, 0, 1, stream);
                 stream.close(null);
                 if (!this._active)
-                    return;
+                    return null;
                 const tmp = GLib.build_filenamev([GLib.get_user_runtime_dir(), 'zenshot-base.png']);
                 GLib.file_set_contents(tmp, stream.steal_as_bytes().get_data());
                 const img = Cairo.ImageSurface.createFromPNG(tmp);
@@ -444,11 +502,20 @@ class Editor {
         } finally {
             cr.$dispose();
         }
+        console.log(`zenshot: crop ${base.getWidth()}x${base.getHeight()} @${k}x ${((GLib.get_monotonic_time() - t0) / 1000).toFixed(0)} ms`);
+        return base;
+    }
+
+    async _enterEdit() {
+        const s = {...this._sel};
+        const base = await this._crop(s);
+        if (!base)
+            return;
         this._base = base;
         this._k = base.getWidth() / s.w;
-        console.log(`zenshot: crop ${base.getWidth()}x${base.getHeight()} @${k}x ${((GLib.get_monotonic_time() - t0) / 1000).toFixed(0)} ms`);
-
+        this._origin = s;
         this._phase = 'edit';
+        this._layoutDim();
         this._setCursor(Clutter.CursorType.DEFAULT);
         this._area = new St.DrawingArea({reactive: true, x: s.x, y: s.y, width: s.w, height: s.h});
         this._area.connect('repaint', a => this._guard(() => this._repaint(a)));
@@ -456,6 +523,28 @@ class Editor {
         this._buildToolbar();
         this._area.queue_repaint();
         this._root.grab_key_focus();
+    }
+
+    // After a resize: crop the new area and move annotations so they stay put on screen.
+    async _recrop() {
+        const s = {...this._sel};
+        const base = await this._crop(s);
+        if (!base)
+            return;
+        const dx = this._origin.x - s.x, dy = this._origin.y - s.y;
+        for (const a of this._anns) {
+            a.x1 += dx;
+            a.x2 += dx;
+            a.y1 += dy;
+            a.y2 += dy;
+            a.pts = a.pts.map(([x, y]) => [x + dx, y + dy]);
+        }
+        this._base = base;
+        this._k = base.getWidth() / s.w;
+        this._origin = s;
+        this._phase = 'edit';
+        this._placeToolbar();
+        this._area.queue_repaint();
     }
 
     _buildToolbar() {
@@ -510,8 +599,12 @@ class Editor {
             `${BTN_STYLE} background-color: #26a269;`));
         bar.add_child(btn(themeIcon('window-close-symbolic'), 'Close (Esc)', () => this.close()));
         this._root.add_child(bar);
+        this._placeToolbar();
+        this._syncToolbar();
+    }
 
-        const s = this._sel;
+    _placeToolbar() {
+        const bar = this._toolbar, s = this._sel;
         const [, bw] = bar.get_preferred_width(-1);
         const [, bh] = bar.get_preferred_height(bw);
         const mon = this._monitorAt(s.x, s.y);
@@ -522,7 +615,6 @@ class Editor {
             y = Math.min(s.y + s.h - bh - 8, mon.y + mon.height - bh - 8);
         const x = Math.max(mon.x, Math.min(s.x + s.w - bw, mon.x + mon.width - bw));
         bar.set_position(Math.round(x), Math.round(y));
-        this._syncToolbar();
     }
 
     _monitorAt(x, y) {
@@ -675,6 +767,8 @@ class Editor {
     _repaint(area) {
         const cr = area.get_context();
         try {
+            // mid-resize the base and annotations still sit at the old selection origin
+            cr.translate(this._origin.x - this._sel.x, this._origin.y - this._sel.y);
             this._paintAll(cr, this._cur ? [...this._anns, this._cur] : this._anns, 1 / this._k);
         } finally {
             cr.$dispose();
@@ -848,6 +942,7 @@ class Editor {
         this._swatches = null;
         this._tip = null;
         this._area = null;
+        this._resize = null;
         this._views = null;
         this._base = null;
     }
