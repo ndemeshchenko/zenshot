@@ -3,6 +3,7 @@ import Cairo from 'gi://cairo';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
+import Mtk from 'gi://Mtk';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
 
@@ -124,21 +125,24 @@ class Editor {
         this._active = true;
         const t0 = GLib.get_monotonic_time();
         try {
-            const shooter = new Shell.Screenshot();
-            const [content, scale] = await shooter.screenshot_stage_to_content();
+            // Paint each stage view (monitor) at its own scale. The shell's full-stage capture uses
+            // the highest scale everywhere, which upscales and blurs monitors with a lower one.
+            this._views = global.stage.peek_stage_views().map(v => {
+                const r = new Mtk.Rectangle();
+                v.get_layout(r);
+                const s = v.get_scale();
+                return {x: r.x, y: r.y, w: r.width, h: r.height, s,
+                    content: global.stage.paint_to_content(r, s, null, Clutter.PaintFlag.NO_CURSORS)};
+            });
             console.log(`zenshot: capture ${((GLib.get_monotonic_time() - t0) / 1000).toFixed(0)} ms`);
-            if (!this._active)
-                return;
-            this._content = content;
-            this._scale = scale;
-            this._build(content);
+            this._build();
         } catch (e) {
             logError(e, 'zenshot: start failed');
             this.close();
         }
     }
 
-    _build(content) {
+    _build() {
         const W = global.stage.width, H = global.stage.height;
         this._W = W;
         this._H = H;
@@ -147,10 +151,12 @@ class Editor {
             reactive: true, can_focus: true, x: 0, y: 0, width: W, height: H,
             layout_manager: new Clutter.FixedLayout(),
         });
-        const shot = new St.Widget({x: 0, y: 0, width: W, height: H});
-        shot.set_content_gravity(Clutter.ContentGravity.RESIZE_FILL);
-        shot.set_content(content);
-        this._root.add_child(shot);
+        for (const v of this._views) {
+            const shot = new St.Widget({x: v.x, y: v.y, width: v.w, height: v.h});
+            shot.set_content_gravity(Clutter.ContentGravity.RESIZE_FILL);
+            shot.set_content(v.content);
+            this._root.add_child(shot);
+        }
 
         this._dim = [];
         for (let i = 0; i < 4; i++) {
@@ -352,25 +358,45 @@ class Editor {
 
     async _enterEdit() {
         const s = this._sel;
-        const k = this._scale;
-        const px = Math.round(s.x * k), py = Math.round(s.y * k);
-        const pw = Math.max(1, Math.round(s.w * k)), ph = Math.max(1, Math.round(s.h * k));
         const t0 = GLib.get_monotonic_time();
-
-        const stream = Gio.MemoryOutputStream.new_resizable();
-        await Shell.Screenshot.composite_to_stream(
-            this._content.get_texture(), px, py, pw, ph, k, null, 0, 0, 1, stream);
-        stream.close(null);
-        const bytes = stream.steal_as_bytes();
-        if (!this._active)
-            return;
-
-        const tmp = GLib.build_filenamev([GLib.get_user_runtime_dir(), 'zenshot-base.png']);
-        GLib.file_set_contents(tmp, bytes.get_data());
-        this._base = Cairo.ImageSurface.createFromPNG(tmp);
-        GLib.unlink(tmp);
-        this._k = this._base.getWidth() / s.w;
-        console.log(`zenshot: crop ${pw}x${ph} ${((GLib.get_monotonic_time() - t0) / 1000).toFixed(0)} ms`);
+        // Output at the highest scale among the monitors the selection touches; a selection on one
+        // monitor is a 1:1 copy of its pixels.
+        const parts = this._views.filter(v =>
+            v.x < s.x + s.w && s.x < v.x + v.w && v.y < s.y + s.h && s.y < v.y + v.h);
+        const k = Math.max(1, ...parts.map(v => v.s));
+        const base = new Cairo.ImageSurface(Cairo.Format.RGB24,
+            Math.max(1, Math.round(s.w * k)), Math.max(1, Math.round(s.h * k)));
+        const cr = new Cairo.Context(base);
+        try {
+            for (const v of parts) {
+                const x0 = Math.max(s.x, v.x), y0 = Math.max(s.y, v.y);
+                const x1 = Math.min(s.x + s.w, v.x + v.w), y1 = Math.min(s.y + s.h, v.y + v.h);
+                const stream = Gio.MemoryOutputStream.new_resizable();
+                await Shell.Screenshot.composite_to_stream(v.content.get_texture(),
+                    Math.round((x0 - v.x) * v.s), Math.round((y0 - v.y) * v.s),
+                    Math.max(1, Math.round((x1 - x0) * v.s)), Math.max(1, Math.round((y1 - y0) * v.s)),
+                    v.s, null, 0, 0, 1, stream);
+                stream.close(null);
+                if (!this._active)
+                    return;
+                const tmp = GLib.build_filenamev([GLib.get_user_runtime_dir(), 'zenshot-base.png']);
+                GLib.file_set_contents(tmp, stream.steal_as_bytes().get_data());
+                const img = Cairo.ImageSurface.createFromPNG(tmp);
+                GLib.unlink(tmp);
+                cr.save();
+                cr.translate((x0 - s.x) * k, (y0 - s.y) * k);
+                cr.scale(k / v.s, k / v.s);
+                cr.setSourceSurface(img, 0, 0);
+                cr.paint();
+                cr.restore();
+                img.finish();
+            }
+        } finally {
+            cr.$dispose();
+        }
+        this._base = base;
+        this._k = base.getWidth() / s.w;
+        console.log(`zenshot: crop ${base.getWidth()}x${base.getHeight()} @${k}x ${((GLib.get_monotonic_time() - t0) / 1000).toFixed(0)} ms`);
 
         this._phase = 'edit';
         this._setCursor(Clutter.CursorType.DEFAULT);
@@ -772,7 +798,7 @@ class Editor {
         this._swatches = null;
         this._tip = null;
         this._area = null;
-        this._content = null;
+        this._views = null;
         this._base = null;
     }
 }

@@ -20,10 +20,14 @@ env -i PATH="$PATH" HOME="$work" GSETTINGS_BACKEND=keyfile XDG_CONFIG_HOME="$wor
     XDG_DATA_HOME="$work/data" XDG_CACHE_HOME="$work/cache" XDG_RUNTIME_DIR="$work/run" \
     ZENSHOT_TEST_OUT="$out" ZENSHOT_TEST_UI="${ZENSHOT_TEST_UI:-}" \
     timeout 60 dbus-run-session -- gnome-shell --headless --wayland --no-x11 \
-    --virtual-monitor 1600x900 > "$work/shell.log" 2>&1 || true
+    --virtual-monitor 1600x900 --virtual-monitor 1920x1080 > "$work/shell.log" 2>&1 || true
 grep -E "zenshot|T: |CRITICAL|JS ERROR" "$work/shell.log" | sed 's/.*Message: [0-9:.]* //'
 check() { grep -q "$1" "$work/shell.log" && echo "PASS  $2" || { echo "FAIL  $2"; fail=1; }; }
 fail=0
+check 'T: crop scale 1, logical = \[600,300\]' "scale-1 monitor next to a scale-2 one captures at 1x"
+check 'T: crop scale 2, logical = \[400,400\]' "scale-2 monitor captures at 2x (logical layout)"
+check 'T: crop across monitors, logical = \[400,200\]' "selection across monitors uses the highest scale"
+check 'T: crop scale 2, physical = \[200,200\]' "scale-2 monitor captures 1:1 (physical layout)"
 check 'T: phase = "edit"' "selection enters edit phase"
 check 'T: tooltip on hover = true' "tooltip shows on hover"
 check 'T: tooltip gone after click = true' "tooltip hides on click"

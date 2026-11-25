@@ -12,7 +12,7 @@ function testHook(ed) {
             const move = async (x, y) => { ptr.notify_absolute_motion(now(), x, y); await sleep(60); };
             const down = async () => { ptr.notify_button(now(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.PRESSED); await sleep(60); };
             const up = async () => { ptr.notify_button(now(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.RELEASED); await sleep(60); };
-            const drag = async (x1, y1, x2, y2) => { await move(x1, y1); await down(); await move((x1 + x2) / 2, (y1 + y2) / 2); await move(x2, y2); await up(); };
+            const drag = async (x1, y1, x2, y2) => { await move(x1, y1); await move(x1, y1); await down(); await move((x1 + x2) / 2, (y1 + y2) / 2); await move(x2, y2); await up(); };
             const key = async (sym, ctrl = false) => {
                 if (ctrl) kbd.notify_keyval(now(), Clutter.KEY_Control_L, Clutter.KeyState.PRESSED);
                 kbd.notify_keyval(now(), sym, Clutter.KeyState.PRESSED);
@@ -23,6 +23,7 @@ function testHook(ed) {
             };
             const centre = b => { const [x, y] = b.get_transformed_position(); const [w, h] = b.get_transformed_size(); return [x + w / 2, y + h / 2]; };
             const T = (n, v) => console.log('T: ' + n + ' = ' + JSON.stringify(v));
+            const run = (...argv) => new Promise(r => Gio.Subprocess.new(argv, Gio.SubprocessFlags.NONE).wait_check_async(null, (p, res) => r(p.wait_check_finish(res))));
             try {
                 // run 1: full flow ending in Ctrl+C
                 await move(1, 1);
@@ -89,6 +90,16 @@ function testHook(ed) {
                 T('after esc w/ entry: active,entry', [ed.active, !!ed._entry]);
                 await key(Clutter.KEY_Escape);
                 T('after 2nd esc active', ed.active); T('modalCount', Main.modalCount);
+                // mixed scales: Meta-0 at 1, Meta-1 (1920x1080) at 2, in both layout modes
+                const views = () => [Main.layoutManager.monitors.map(m => [m.x, m.y, m.width, m.height, m.geometry_scale]), global.stage.peek_stage_views().map(v => v.get_scale())];
+                const layout = async mode => { await run('/usr/bin/python3', '/usr/bin/gdctl', 'set', '-l', mode, '-L', '-M', 'Meta-0', '-p', '-L', '-M', 'Meta-1', '-s', '2', '--right-of', 'Meta-0'); await sleep(1000); T('views ' + mode, views()); };
+                const crop = async (x, y, w, h) => { await ed.start(); await sleep(300); ed._sel = {x, y, w, h}; await ed._enterEdit(); const r = [ed._base.getWidth(), ed._base.getHeight()]; await key(Clutter.KEY_Escape); await sleep(200); return r; };
+                await layout('physical');
+                T('crop scale 2, physical', await crop(1700, 50, 200, 200));
+                await layout('logical');
+                T('crop scale 2, logical', await crop(1700, 50, 200, 200));
+                T('crop across monitors, logical', await crop(1500, 100, 200, 100));
+                T('crop scale 1, logical', await crop(200, 150, 600, 300));
                 console.log('zenshot-test: DONE');
             } catch (e) {
                 logError(e, 'zenshot-test failed');
@@ -101,7 +112,6 @@ function testHook(ed) {
                 const js = Gio.File.new_for_path(GLib.build_filenamev([GLib.get_user_data_dir(), 'gnome-shell', 'extensions', uuid, 'extension.js']));
                 const src = new TextDecoder().decode(js.load_contents(null)[1]);
                 js.replace_contents(new TextEncoder().encode(src + "\nconsole.log('T: reloaded code ran');\n"), null, false, Gio.FileCreateFlags.NONE, null);
-                const run = (...argv) => new Promise(r => Gio.Subprocess.new(argv, Gio.SubprocessFlags.NONE).wait_check_async(null, (p, res) => r(p.wait_check_finish(res))));
                 T('cli disable/enable', [await run('gnome-extensions', 'disable', uuid), await run('gnome-extensions', 'enable', uuid)]);
                 await sleep(1000);
                 const ext = Main.extensionManager.lookup(uuid);
