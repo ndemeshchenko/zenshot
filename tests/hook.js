@@ -1,4 +1,7 @@
 function testHook(ed) {
+    if (globalThis.zenshotTested) // the reload test below re-runs start()
+        return;
+    globalThis.zenshotTested = true;
     GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 6, () => {
         (async () => {
             const sleep = ms => new Promise(r => GLib.timeout_add(GLib.PRIORITY_DEFAULT, ms, () => { r(); return GLib.SOURCE_REMOVE; }));
@@ -91,6 +94,21 @@ function testHook(ed) {
                 logError(e, 'zenshot-test failed');
             }
             ed.close();
+
+            // live reload: change the installed code, then disable + enable with the CLI, as `make install` does
+            try {
+                const uuid = 'zenshot@local';
+                const js = Gio.File.new_for_path(GLib.build_filenamev([GLib.get_user_data_dir(), 'gnome-shell', 'extensions', uuid, 'extension.js']));
+                const src = new TextDecoder().decode(js.load_contents(null)[1]);
+                js.replace_contents(new TextEncoder().encode(src + "\nconsole.log('T: reloaded code ran');\n"), null, false, Gio.FileCreateFlags.NONE, null);
+                const run = (...argv) => new Promise(r => Gio.Subprocess.new(argv, Gio.SubprocessFlags.NONE).wait_check_async(null, (p, res) => r(p.wait_check_finish(res))));
+                T('cli disable/enable', [await run('gnome-extensions', 'disable', uuid), await run('gnome-extensions', 'enable', uuid)]);
+                await sleep(1000);
+                const ext = Main.extensionManager.lookup(uuid);
+                T('state after reload', [ext.state, ext.stateObj._stop !== null]);
+            } catch (e) {
+                logError(e, 'zenshot-test reload failed');
+            }
         })();
         return GLib.SOURCE_REMOVE;
     });

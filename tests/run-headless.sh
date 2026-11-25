@@ -11,7 +11,7 @@ mkdir -p "$ext" "$work/config/glib-2.0/settings" "$work/cache" "$work/run"
 chmod 700 "$work/run"
 cp -r "$here/extension.js" "$here/metadata.json" "$here/schemas" "$ext/"
 glib-compile-schemas "$ext/schemas"
-sed -i 's|this._settings = this.getSettings();|this._settings = this.getSettings(); testHook(this._editor);|' "$ext/extension.js"
+sed -i 's|const settings = ext.getSettings();|& testHook(editor);|' "$ext/extension.js"
 cat "$here/tests/hook.js" >> "$ext/extension.js"
 printf "[org/gnome/shell]\nenabled-extensions=['%s']\ndisable-user-extensions=false\n" "$uuid" \
     > "$work/config/glib-2.0/settings/keyfile"
@@ -41,5 +41,7 @@ check 'T: active after esc (select) = false' "esc cancels while selecting"
 check 'T: active after esc (edit) = false' "esc cancels while editing"
 check 'after esc w/ entry: active,entry = \[true,false\]' "esc closes the text box only"
 check 'T: after 2nd esc active = false' "second esc closes the editor"
+check 'T: reloaded code ran' "make install path runs new code without re-login"
+check 'T: state after reload = \[1,true\]' "extension active after reload"
 if grep -qE "CRITICAL|JS ERROR" "$work/shell.log"; then echo "FAIL  errors in shell log"; fail=1; fi
 exit $fail

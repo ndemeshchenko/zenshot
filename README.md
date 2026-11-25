@@ -44,9 +44,11 @@ Requires GNOME Shell **50** (the only version it has been tested on).
 
 ```sh
 make install
-# log out and back in (Wayland only discovers new extensions at login), then:
-gnome-extensions enable zenshot@local
 ```
+
+The first time, log out and back in once: on Wayland the shell only discovers new extensions at login.
+`make install` already adds it to your enabled extensions. After that, running `make install` again
+upgrades it in place, with no re-login.
 
 `make pack` builds an installable zip with `gnome-extensions pack`.
 
@@ -64,7 +66,9 @@ settings, and drives it with virtual pointer and keyboard devices: select, draw,
 paths. It does not touch your session. It needs `gnome-shell` and `dbus-run-session`. `tests/last-render.png`
 is the rendered output of the last run.
 
-On GNOME 45+ the shell caches extension code, so changes to `extension.js` need a re-login to load.
+The shell caches extension code by file path, so `enable()` re-imports `extension.js` through a symlink in
+`$XDG_RUNTIME_DIR/zenshot/` named after the file's mtime. That is what lets `make install` reload it live.
+Changes to the `Zenshot` class itself or to `metadata.json` still need a re-login.
 
 ## License
 
