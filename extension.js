@@ -134,6 +134,29 @@ class Editor {
                 return {x: r.x, y: r.y, w: r.width, h: r.height, s,
                     content: global.stage.paint_to_content(r, s, null, Clutter.PaintFlag.NO_CURSORS)};
             });
+            // Window frames, top-most first, for click-to-capture. Taken with the freeze, since the
+            // windows keep moving under the frozen image. None in the overview: windows are shown
+            // as thumbnails there, away from their real frames.
+            const ws = global.workspace_manager.get_active_workspace();
+            const wins = Main.overview.visible ? [] : global.get_window_actors().map(a => a.meta_window);
+            this._wins = global.display.sort_windows_by_stacking(wins)
+                .filter(w => w.showing_on_its_workspace() && w.located_on_workspace(ws) &&
+                    w.get_window_type() !== Meta.WindowType.DESKTOP)
+                .reverse()
+                .map(w => {
+                    // Bounding box of the frame's parts that are on a monitor, so no part of the
+                    // crop falls outside every screen.
+                    const f = w.get_frame_rect();
+                    const parts = this._views
+                        .map(v => [Math.max(f.x, v.x), Math.max(f.y, v.y),
+                            Math.min(f.x + f.width, v.x + v.w), Math.min(f.y + f.height, v.y + v.h)])
+                        .filter(([x0, y0, x1, y1]) => x1 > x0 && y1 > y0);
+                    if (!parts.length)
+                        return null;
+                    const x = Math.min(...parts.map(p => p[0])), y = Math.min(...parts.map(p => p[1]));
+                    return {x, y, w: Math.max(...parts.map(p => p[2])) - x, h: Math.max(...parts.map(p => p[3])) - y};
+                })
+                .filter(r => r);
             console.log(`zenshot: capture ${((GLib.get_monotonic_time() - t0) / 1000).toFixed(0)} ms`);
             this._build();
         } catch (e) {
@@ -174,6 +197,7 @@ class Editor {
         this._tool = 'arrow';
         this._color = 0;
         this._width = 1;
+        this._hover = this._winAt(...global.get_pointer());
         this._layoutDim();
 
         this._root.connect('button-press-event', (a, ev) => this._guard(() => this._press(ev)));
@@ -207,8 +231,13 @@ class Editor {
         this._root?.set_cursor_type(type);
     }
 
+    // While selecting, highlight the window under the pointer until the pointer moves enough to
+    // count as a drag.
     _layoutDim() {
-        const s = this._sel ?? {x: 0, y: 0, w: 0, h: 0};
+        const moved = this._sel && Math.max(this._sel.w, this._sel.h) >= MIN_SELECTION;
+        const hover = this._phase === 'select' && !moved;
+        const r = hover ? this._hover : this._sel;
+        const s = r ?? {x: 0, y: 0, w: 0, h: 0};
         const W = this._W, H = this._H;
         const rects = [
             [0, 0, W, s.y],
@@ -221,11 +250,16 @@ class Editor {
             d.set_position(x, y);
             d.set_size(Math.max(0, w), Math.max(0, h));
         });
-        this._border.visible = !!this._sel;
-        if (this._sel) {
-            this._border.set_position(s.x - 1, s.y - 1);
-            this._border.set_size(s.w + 2, s.h + 2);
+        this._border.visible = !!r;
+        if (r) {
+            const o = hover ? 0 : 1; // the hover outline sits inside, so a fullscreen window still shows one
+            this._border.set_position(s.x - o, s.y - o);
+            this._border.set_size(s.w + 2 * o, s.h + 2 * o);
         }
+    }
+
+    _winAt(x, y) {
+        return this._wins.find(r => x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h) ?? null;
     }
 
     _inSel(x, y) {
@@ -249,6 +283,8 @@ class Editor {
     _press(ev) {
         if (ev.get_button() !== 1 || this._overUI(ev))
             return Clutter.EVENT_PROPAGATE;
+        if (this._phase === 'crop') // until _enterEdit() finishes
+            return Clutter.EVENT_STOP;
         const [x, y] = ev.get_coords();
         if (this._phase === 'select') {
             this._start = [x, y];
@@ -279,6 +315,13 @@ class Editor {
     }
 
     _motion(ev) {
+        if (this._phase === 'select' && !this._dragging) {
+            const hover = this._winAt(...ev.get_coords());
+            if (hover !== this._hover) {
+                this._hover = hover;
+                this._layoutDim();
+            }
+        }
         if (!this._dragging)
             return Clutter.EVENT_PROPAGATE;
         const [x, y] = ev.get_coords();
@@ -304,10 +347,17 @@ class Editor {
             return Clutter.EVENT_PROPAGATE;
         this._dragging = false;
         if (this._phase === 'select') {
-            if (this._sel.w < MIN_SELECTION || this._sel.h < MIN_SELECTION) {
+            const {w, h} = this._sel;
+            if (Math.max(w, h) < MIN_SELECTION) { // a click: take the window under it
+                const win = this._winAt(...this._start);
+                this._sel = win && {...win};
+            } else if (Math.min(w, h) < MIN_SELECTION) {
                 this._sel = null;
+            }
+            if (!this._sel) {
                 this._layoutDim();
             } else {
+                this._phase = 'crop';
                 this._enterEdit().catch(e => {
                     logError(e, 'zenshot: edit failed');
                     this.close();

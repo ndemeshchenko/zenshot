@@ -16,7 +16,8 @@ only encodes the small area you select.
 
 ## Features
 
-- Area selection on a frozen screen, across multiple monitors
+- Area selection on a frozen screen, across multiple monitors, each captured at its own scale
+- Window capture: the window under the pointer is highlighted, click to select it
 - Tools: **Line, Arrow, Rect, Area** (filled highlight), **Blur** (mosaic), **Pen, Text**
 - Icon toolbar with tooltips, a 12-colour palette popup (red by default), three sizes, undo
 - Copy to clipboard (PNG), or save to `~/Pictures/Screenshots`, with a notification
@@ -26,6 +27,7 @@ only encodes the small area you select.
 | Key | Action |
 |---|---|
 | Super+Shift+A | Start a capture (configurable) |
+| Click (no drag) | Select the highlighted window |
 | Enter / Ctrl+C | Copy and close |
 | Ctrl+S | Save and copy |
 | Ctrl+Z | Undo |
@@ -56,6 +58,7 @@ upgrades it in place, with no re-login.
 
 - Tested only on GNOME 50.1. It uses internal Shell APIs, so expect small fixes after major GNOME releases.
 - No moving or resizing the selection after you drag it, and no magnifier yet.
+- Window capture takes what is visible in the window's frame, so anything on top of it is included, and it is off while the Activities overview is open.
 - Over remote desktops such as NoMachine, the image clipboard may not sync to the client. Paste on the machine itself to check.
 - Extensions run inside the shell with full access to the session. Read the code before you install it, it's one file.
 
