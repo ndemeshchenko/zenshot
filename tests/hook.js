@@ -133,6 +133,15 @@ function testHook(ed) {
                 await move(1, 1); await ed.start(); await sleep(300);
                 T('window clipped to its monitor', [fr(wa).y + fr(wa).h > 900, same(ed._winAt(short.x + 150, 750), {x: short.x + 100, y: 700, w: 500, h: 200})]);
                 await key(Clutter.KEY_Escape); await sleep(200);
+                // resize: drag a corner, then an edge; the arrow drawn first stays put on screen
+                await move(1, 1); await ed.start(); await sleep(300);
+                await drag(200, 150, 600, 450); await sleep(400);
+                await drag(300, 200, 400, 250);
+                await drag(600, 450, 700, 500); await sleep(400);
+                T('resize corner', [ed._phase, ed._sel, ed._base.getWidth(), ed._base.getHeight()]);
+                await drag(200, 300, 100, 300); await sleep(400);
+                T('resize edge', [ed._sel, ed._anns.map(a => [a.x1, a.y1, a.x2, a.y2])]);
+                await key(Clutter.KEY_Escape); await sleep(200);
                 // mixed scales: Meta-0 at 1, Meta-1 (1920x1080) at 2, in both layout modes
                 const views = () => [Main.layoutManager.monitors.map(m => [m.x, m.y, m.width, m.height, m.geometry_scale]), global.stage.peek_stage_views().map(v => v.get_scale())];
                 const layout = async mode => { await run('/usr/bin/python3', '/usr/bin/gdctl', 'set', '-l', mode, '-L', '-M', 'Meta-0', '-p', '-L', '-M', 'Meta-1', '-s', '2', '--right-of', 'Meta-0'); await sleep(1000); T('views ' + mode, views()); };
