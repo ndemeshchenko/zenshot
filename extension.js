@@ -10,23 +10,103 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 const COLORS = [
-    ['#e53935', [0.898, 0.224, 0.208]],
-    ['#fdd835', [0.992, 0.847, 0.208]],
-    ['#43a047', [0.263, 0.627, 0.278]],
-    ['#1e88e5', [0.118, 0.533, 0.898]],
-    ['#ffffff', [1, 1, 1]],
-    ['#000000', [0, 0, 0]],
+    '#e53935', '#fb8c00', '#fdd835', '#43a047', '#00acc1', '#1e88e5',
+    '#8e24aa', '#ec407a', '#ffffff', '#9e9e9e', '#6d4c41', '#000000',
 ];
+const hexRgb = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255);
 const WIDTHS = [['S', 2], ['M', 4], ['L', 8]];
 const TOOLS = [
-    ['line', 'Line'], ['arrow', 'Arrow'], ['rect', 'Rect'], ['area', 'Area'],
+    ['line', 'Line'], ['arrow', 'Arrow'], ['rect', 'Rectangle'], ['area', 'Highlight area'],
     ['blur', 'Blur'], ['pen', 'Pen'], ['text', 'Text'],
 ];
 const BLUR_BLOCK = 8; // logical px per mosaic block
 const MIN_SELECTION = 6;
 
-const BTN_STYLE = 'color: white; padding: 4px 9px; border-radius: 6px; font-weight: bold;';
+const BTN_STYLE = 'padding: 6px; border-radius: 6px;';
 const BTN_ACTIVE = `${BTN_STYLE} background-color: #3584e4;`;
+const TXT_STYLE = 'color: white; padding: 4px 9px; border-radius: 6px; font-weight: bold;';
+const TXT_ACTIVE = `${TXT_STYLE} background-color: #3584e4;`;
+const ICON_SIZE = 20;
+
+const circleStyle = (css, ring) =>
+    `background-color: ${css}; width: 18px; height: 18px; border-radius: 11px; border: 2px solid ${ring}; margin: 2px; padding: 0;`;
+
+function arrowHead(cr, x1, y1, x2, y2, head) {
+    const ang = Math.atan2(y2 - y1, x2 - x1), spread = Math.PI / 7;
+    cr.moveTo(x2, y2);
+    cr.lineTo(x2 - head * Math.cos(ang - spread), y2 - head * Math.sin(ang - spread));
+    cr.lineTo(x2 - head * Math.cos(ang + spread), y2 - head * Math.sin(ang + spread));
+    cr.closePath();
+    cr.fill();
+}
+
+// Tool icons are drawn with Cairo on a 20x20 grid: the icon theme has no line/arrow/blur glyphs.
+const ICONS = {
+    line: cr => {
+        cr.moveTo(3.5, 16.5);
+        cr.lineTo(16.5, 3.5);
+        cr.stroke();
+    },
+    arrow: cr => {
+        cr.moveTo(3.5, 16.5);
+        cr.lineTo(13.5, 6.5);
+        cr.stroke();
+        arrowHead(cr, 3.5, 16.5, 16.5, 3.5, 8);
+    },
+    rect: cr => {
+        cr.rectangle(3.5, 5.5, 13, 9);
+        cr.stroke();
+    },
+    area: cr => {
+        cr.setSourceRGBA(1, 1, 1, 0.3);
+        cr.rectangle(3.5, 5.5, 13, 9);
+        cr.fillPreserve();
+        cr.setSourceRGBA(1, 1, 1, 1);
+        cr.stroke();
+    },
+    blur: cr => {
+        for (let i = 0; i < 3; i++) {
+            for (let j = 0; j < 3; j++) {
+                cr.setSourceRGBA(1, 1, 1, (i + j) % 2 ? 0.35 : 0.95);
+                cr.rectangle(3 + i * 5, 3 + j * 5, 4, 4);
+                cr.fill();
+            }
+        }
+    },
+    pen: cr => {
+        cr.moveTo(3, 14);
+        cr.curveTo(6, 3, 9, 3, 10, 10);
+        cr.curveTo(11, 17, 14, 17, 17, 6);
+        cr.stroke();
+    },
+    text: cr => {
+        cr.setLineWidth(2.2);
+        cr.moveTo(4, 5);
+        cr.lineTo(16, 5);
+        cr.moveTo(10, 5);
+        cr.lineTo(10, 16);
+        cr.stroke();
+    },
+};
+
+function makeIcon(id) {
+    const area = new St.DrawingArea({width: ICON_SIZE, height: ICON_SIZE});
+    area.connect('repaint', () => {
+        const cr = area.get_context();
+        try {
+            cr.setSourceRGBA(1, 1, 1, 1);
+            cr.setLineWidth(1.8);
+            cr.setLineCap(Cairo.LineCap.ROUND);
+            cr.setLineJoin(Cairo.LineJoin.ROUND);
+            ICONS[id](cr);
+        } finally {
+            cr.$dispose();
+        }
+    });
+    return area;
+}
+
+const themeIcon = name => new St.Icon({icon_name: name, icon_size: 16, style: 'color: white;'});
 
 class Editor {
     constructor() {
@@ -147,25 +227,31 @@ class Editor {
         return s && x >= s.x && y >= s.y && x < s.x + s.w && y < s.y + s.h;
     }
 
-    _overToolbar(ev) {
-        if (!this._toolbar)
-            return false;
+    _overUI(ev) {
         const [x, y] = ev.get_coords();
-        const [tx, ty] = this._toolbar.get_transformed_position();
-        const [tw, th] = this._toolbar.get_transformed_size();
-        return x >= tx && y >= ty && x < tx + tw && y < ty + th;
+        return [this._toolbar, this._palette].some(w => {
+            if (!w)
+                return false;
+            const [wx, wy] = w.get_transformed_position();
+            const [ww, wh] = w.get_transformed_size();
+            return x >= wx && y >= wy && x < wx + ww && y < wy + wh;
+        });
     }
 
     // --- input -----------------------------------------------------------
 
     _press(ev) {
-        if (ev.get_button() !== 1 || this._overToolbar(ev))
+        if (ev.get_button() !== 1 || this._overUI(ev))
             return Clutter.EVENT_PROPAGATE;
         const [x, y] = ev.get_coords();
         if (this._phase === 'select') {
             this._start = [x, y];
             this._sel = {x, y, w: 0, h: 0};
             this._dragging = true;
+            return Clutter.EVENT_STOP;
+        }
+        if (this._palette) {
+            this._closePalette();
             return Clutter.EVENT_STOP;
         }
         if (this._entry) {
@@ -175,7 +261,7 @@ class Editor {
         if (!this._inSel(x, y))
             return Clutter.EVENT_STOP;
         const lx = x - this._sel.x, ly = y - this._sel.y;
-        const [, rgb] = COLORS[this._color];
+        const rgb = hexRgb(COLORS[this._color]);
         const width = WIDTHS[this._width][1];
         if (this._tool === 'text') {
             this._openEntry(x, y, lx, ly);
@@ -235,6 +321,11 @@ class Editor {
     _key(ev) {
         const sym = ev.get_key_symbol();
         const ctrl = (ev.get_state() & Clutter.ModifierType.CONTROL_MASK) !== 0;
+        if (this._palette) {
+            if (sym === Clutter.KEY_Escape)
+                this._closePalette();
+            return Clutter.EVENT_STOP;
+        }
         if (this._entry) {
             if (sym === Clutter.KEY_Escape)
                 this._closeEntry();
@@ -297,55 +388,57 @@ class Editor {
         });
         this._toolbar = bar;
         this._toolBtns = {};
-        const btn = (label, cb, style = BTN_STYLE) => {
-            const b = new St.Button({label, can_focus: false, style, reactive: true});
+        const btn = (content, tip, cb, style = BTN_STYLE) => {
+            const b = new St.Button({
+                ...(typeof content === 'string' ? {label: content} : {child: content}),
+                can_focus: false, reactive: true, style,
+            });
             b.connect('clicked', () => this._guard(() => {
+                this._hideTip();
+                this._closePalette();
                 cb();
                 this._root?.grab_key_focus();
             }));
+            this._addTip(b, tip);
             return b;
         };
         const sep = () => bar.add_child(new St.Widget({style: 'background-color: #666; width: 1px; margin: 3px 2px;'}));
 
         for (const [id, label] of TOOLS) {
-            const b = btn(label, () => this._setTool(id));
+            const b = btn(makeIcon(id), label, () => this._setTool(id));
             this._toolBtns[id] = b;
             bar.add_child(b);
         }
         sep();
-        this._colorBtns = COLORS.map(([css], i) => {
-            const b = new St.Button({can_focus: false, reactive: true});
-            b.connect('clicked', () => this._guard(() => {
-                this._color = i;
-                this._syncToolbar();
-                this._root?.grab_key_focus();
-            }));
-            b._css = css;
-            bar.add_child(b);
-            return b;
-        });
+        this._colorBtn = new St.Button({can_focus: false, reactive: true, y_align: Clutter.ActorAlign.CENTER});
+        this._colorBtn.connect('clicked', () => this._guard(() => {
+            this._hideTip();
+            this._togglePalette();
+            this._root?.grab_key_focus();
+        }));
+        this._addTip(this._colorBtn, 'Colour');
+        bar.add_child(this._colorBtn);
         sep();
         this._widthBtns = WIDTHS.map(([label], i) => {
-            const b = btn(label, () => {
+            const b = btn(label, ['Thin', 'Medium', 'Thick'][i], () => {
                 this._width = i;
                 this._syncToolbar();
-            });
+            }, TXT_STYLE);
             bar.add_child(b);
             return b;
         });
         sep();
-        bar.add_child(btn('Undo', () => this._undo()));
-        bar.add_child(btn('Save', () => this._finish(true)));
-        bar.add_child(btn('Copy', () => this._finish(false), `${BTN_STYLE} background-color: #26a269;`));
-        bar.add_child(btn('✕', () => this.close()));
+        bar.add_child(btn(themeIcon('edit-undo-symbolic'), 'Undo (Ctrl+Z)', () => this._undo()));
+        bar.add_child(btn(themeIcon('document-save-symbolic'), 'Save (Ctrl+S)', () => this._finish(true)));
+        bar.add_child(btn(themeIcon('edit-copy-symbolic'), 'Copy (Enter)', () => this._finish(false),
+            `${BTN_STYLE} background-color: #26a269;`));
+        bar.add_child(btn(themeIcon('window-close-symbolic'), 'Close (Esc)', () => this.close()));
         this._root.add_child(bar);
 
         const s = this._sel;
         const [, bw] = bar.get_preferred_width(-1);
         const [, bh] = bar.get_preferred_height(bw);
-        const mon = Main.layoutManager.monitors.find(m =>
-            s.x >= m.x && s.x < m.x + m.width && s.y >= m.y && s.y < m.y + m.height) ??
-            Main.layoutManager.primaryMonitor;
+        const mon = this._monitorAt(s.x, s.y);
         let y = s.y + s.h + 8;
         if (y + bh > mon.y + mon.height)
             y = s.y - bh - 8;
@@ -356,6 +449,93 @@ class Editor {
         this._syncToolbar();
     }
 
+    _monitorAt(x, y) {
+        return Main.layoutManager.monitors.find(m =>
+            x >= m.x && x < m.x + m.width && y >= m.y && y < m.y + m.height) ??
+            Main.layoutManager.primaryMonitor;
+    }
+
+    // Puts a popup (palette, tooltip) under the toolbar, or above it when there is no room,
+    // centred on the anchor button.
+    _place(actor, anchor) {
+        const [bx, by] = this._toolbar.get_transformed_position();
+        const [, bh] = this._toolbar.get_transformed_size();
+        const [ax, , ] = anchor.get_transformed_position();
+        const [aw] = anchor.get_transformed_size();
+        const [, pw] = actor.get_preferred_width(-1);
+        const [, ph] = actor.get_preferred_height(pw);
+        const mon = this._monitorAt(bx, by);
+        let y = by + bh + 6;
+        if (y + ph > mon.y + mon.height)
+            y = by - ph - 6;
+        const x = Math.max(mon.x, Math.min(ax + aw / 2 - pw / 2, mon.x + mon.width - pw));
+        actor.set_position(Math.round(x), Math.round(y));
+    }
+
+    _addTip(b, text) {
+        b.connect('notify::hover', () => this._guard(() => {
+            if (b.hover && !this._palette && this._root)
+                this._showTip(b, text);
+            else
+                this._hideTip();
+        }));
+    }
+
+    _showTip(b, text) {
+        this._hideTip();
+        const tip = new St.Label({
+            text,
+            style: 'background-color: rgba(0,0,0,0.9); color: white; padding: 3px 8px; border-radius: 6px; font-size: 11px;',
+        });
+        this._root.add_child(tip);
+        this._tip = tip;
+        this._place(tip, b);
+    }
+
+    _hideTip() {
+        this._tip?.destroy();
+        this._tip = null;
+    }
+
+    _togglePalette() {
+        if (this._palette) {
+            this._closePalette();
+            return;
+        }
+        const pal = new St.BoxLayout({
+            vertical: true,
+            style: 'background-color: rgba(30,30,30,0.95); border-radius: 10px; padding: 6px; spacing: 2px;',
+        });
+        this._swatches = [];
+        for (let r = 0; r < 2; r++) {
+            const row = new St.BoxLayout({style: 'spacing: 2px;'});
+            COLORS.slice(r * 6, r * 6 + 6).forEach((css, j) => {
+                const i = r * 6 + j;
+                const b = new St.Button({can_focus: false, reactive: true});
+                b._css = css;
+                b.connect('clicked', () => this._guard(() => {
+                    this._color = i;
+                    this._closePalette();
+                    this._syncToolbar();
+                    this._root?.grab_key_focus();
+                }));
+                row.add_child(b);
+                this._swatches.push(b);
+            });
+            pal.add_child(row);
+        }
+        this._root.add_child(pal);
+        this._palette = pal;
+        this._syncToolbar();
+        this._place(pal, this._colorBtn);
+    }
+
+    _closePalette() {
+        this._palette?.destroy();
+        this._palette = null;
+        this._swatches = null;
+    }
+
     _setTool(id) {
         this._tool = id;
         this._syncToolbar();
@@ -364,12 +544,12 @@ class Editor {
     _syncToolbar() {
         for (const [id, b] of Object.entries(this._toolBtns))
             b.style = id === this._tool ? BTN_ACTIVE : BTN_STYLE;
-        this._colorBtns.forEach((b, i) => {
-            const border = i === this._color ? '2px solid #3584e4' : '2px solid transparent';
-            b.style = `background-color: ${b._css}; width: 18px; height: 18px; border-radius: 9px; border: ${border}; margin: 3px 1px;`;
+        this._colorBtn.style = circleStyle(COLORS[this._color], 'white');
+        this._swatches?.forEach((b, i) => {
+            b.style = circleStyle(b._css, i === this._color ? '#3584e4' : 'rgba(255,255,255,0.35)');
         });
         this._widthBtns.forEach((b, i) => {
-            b.style = i === this._width ? BTN_ACTIVE : BTN_STYLE;
+            b.style = i === this._width ? TXT_ACTIVE : TXT_STYLE;
         });
     }
 
@@ -385,9 +565,9 @@ class Editor {
     }
 
     _openEntry(sx, sy, lx, ly) {
-        const [css] = COLORS[this._color];
+        const css = COLORS[this._color];
         const size = this._fontSize(WIDTHS[this._width][1]);
-        this._entryPos = {lx, ly, rgb: COLORS[this._color][1], size};
+        this._entryPos = {lx, ly, rgb: hexRgb(css), size};
         this._entry = new St.Entry({
             x: sx, y: sy, width: 260, can_focus: true,
             style: `padding: 0; margin: 0; min-height: 0; background-color: rgba(0,0,0,0.35); color: ${css}; ` +
@@ -588,6 +768,9 @@ class Editor {
         }
         this._entry = null;
         this._toolbar = null;
+        this._palette = null;
+        this._swatches = null;
+        this._tip = null;
         this._area = null;
         this._content = null;
         this._base = null;
